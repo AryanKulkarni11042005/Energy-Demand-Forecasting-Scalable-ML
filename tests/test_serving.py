@@ -47,3 +47,12 @@ class TestServingEndpoints:
     def test_predict_validation_error_when_missing_respondent(self, client: TestClient):
         response = client.post("/api/predict", json={})
         assert response.status_code == 422
+
+    def test_reload_models(self, client: TestClient):
+        response = client.post("/admin/reload-models")
+        assert response.status_code == 200
+        data = response.json()
+        assert data["status"] == "reloaded"
+        assert "models_loaded" in data
+
+

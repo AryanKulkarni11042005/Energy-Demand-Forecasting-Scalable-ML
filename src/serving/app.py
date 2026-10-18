@@ -229,3 +229,4 @@ def serve_ui():
     if not index_file.exists():
         return HTMLResponse("<h1>UI not installed yet</h1>")
     return FileResponse(index_file)
+

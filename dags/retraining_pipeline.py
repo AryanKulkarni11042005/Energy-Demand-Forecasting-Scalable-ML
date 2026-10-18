@@ -1,14 +1,13 @@
 """Phase 8/13 - Airflow DAG: automated ingestion + retraining pipeline.
 
-Runs on the project's own `.venv` (Python 3.13) via subprocess, invoked from
-a separate `.venv-airflow` (Python 3.12) that only hosts the Airflow
-scheduler/webserver. No project code runs inside Airflow's interpreter.
+Runs daily on schedule. Compatible with both Airflow 2.10+ and Airflow 3.x,
+and portable across Docker containers and local developer environments.
 
 Pipeline:
     fetch (incremental) -> validate (gate) -> train candidate -> promote gate
         -> reload live serving models
 
-Exit codes from the underlying scripts are used to gate progression:
+Exit codes from underlying scripts gate progression:
     fetch_raw_data.py       0 = ok, 1 = failed / no data
     validate_raw_data.py    0 = passed, 1 = structural errors, 2 = no data
     train_and_evaluate.py   0 = ok
@@ -20,17 +19,31 @@ worked and the previous production model was correctly kept in place.
 
 from __future__ import annotations
 
-import pendulum
-from airflow.decorators import dag, task
-from airflow.exceptions import AirflowSkipException
-from airflow.operators.bash import BashOperator
+import os
+import subprocess
+from pathlib import Path
 
-PROJECT_ROOT = "/Users/aryankulkarni/Desktop/BE/honours/Mini Project"
-PROJECT_PYTHON = f'"{PROJECT_ROOT}/.venv/bin/python"'
+import pendulum
+
+# Airflow 3.x / 2.x unified imports
+try:
+    from airflow.sdk import dag, task
+    from airflow.sdk.exceptions import AirflowSkipException
+except ImportError:
+    from airflow.decorators import dag, task
+    from airflow.exceptions import AirflowSkipException
+
+try:
+    from airflow.providers.standard.operators.bash import BashOperator
+except ImportError:
+    from airflow.operators.bash import BashOperator
+
+PROJECT_ROOT = os.environ.get("PROJECT_ROOT", "/opt/airflow/project")
+PROJECT_PYTHON = os.environ.get("PROJECT_PYTHON", "python")
 
 
 def run(script_and_args: str) -> str:
-    """Build a shell command that runs a project script with the project venv."""
+    """Build a shell command that runs a project script with the configured python."""
     return f'cd "{PROJECT_ROOT}" && {PROJECT_PYTHON} {script_and_args}'
 
 
@@ -66,20 +79,25 @@ def energy_demand_retraining_pipeline():
         task_id="train_candidate_model",
         bash_command=run(
             "scripts/train_and_evaluate.py "
-            '--models-dir "{{ params.project_root }}/models_candidate" '
-            '--output-summary "{{ params.project_root }}/data/evaluation_summary_candidate.json"'
+            f'--models-dir "{PROJECT_ROOT}/models_candidate" '
+            f'--output-summary "{PROJECT_ROOT}/data/evaluation_summary_candidate.json"'
         ),
-        params={"project_root": PROJECT_ROOT},
     )
 
     @task(task_id="promote_if_not_regressed")
     def promote_if_not_regressed() -> str:
-        import subprocess
-
         result = subprocess.run(
             [
-                f"{PROJECT_ROOT}/.venv/bin/python",
+                PROJECT_PYTHON,
                 f"{PROJECT_ROOT}/scripts/promote_model.py",
+                "--candidate-models-dir",
+                f"{PROJECT_ROOT}/models_candidate",
+                "--candidate-summary",
+                f"{PROJECT_ROOT}/data/evaluation_summary_candidate.json",
+                "--live-models-dir",
+                f"{PROJECT_ROOT}/models",
+                "--live-summary",
+                f"{PROJECT_ROOT}/data/evaluation_summary.json",
             ],
             cwd=PROJECT_ROOT,
             capture_output=True,
@@ -99,7 +117,8 @@ def energy_demand_retraining_pipeline():
     reload_live_models = BashOperator(
         task_id="reload_live_models",
         bash_command=(
-            'curl -sf -X POST http://127.0.0.1:8000/admin/reload-models '
+            'curl -sf -X POST http://host.docker.internal:8000/admin/reload-models '
+            '|| curl -sf -X POST http://127.0.0.1:8000/admin/reload-models '
             '|| echo "serving app not reachable; models will load fresh on next server start"'
         ),
     )
