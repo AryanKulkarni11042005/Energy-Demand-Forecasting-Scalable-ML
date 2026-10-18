@@ -2,7 +2,7 @@
 
 Production-grade time-series forecasting of next-day regional electricity demand across US balancing authorities using the **EIA API v2**.
 
-**Status: Core MLOps Pipeline Complete (Phases 1–4, 8–10, 13). 79 offline tests passing.**
+**Status: Core MLOps Pipeline Complete (Phases 1–10, 13). 91 offline tests passing.**
 
 ---
 
@@ -32,6 +32,9 @@ Production-grade time-series forecasting of next-day regional electricity demand
 - **Temporal Integrity**: Full calendar daily reindexing prevents `shift()` from skipping over interior missing days. Chronological splits with zero data leakage (`train < val < test`).
 - **Feature Engineering**: Demand lags ($t, t-1, t-2, t-6, t-7, t-13, t-14, t-364$), rolling stats (7, 14, 30 days), rolling trend slopes (7 and 30-day linear regression momentum), exogenous grid features (`net_generation`, `interchange`), and US federal holiday indicators (observed dates, before/after, bridge days).
 - **Per-Tier LightGBM Models**: Avoids 52-model operational sprawl by clustering into **Large** (≥500k MWh/day), **Medium** (50k–500k), and **Small** (<50k).
+- **Time-Series Aware Optuna HPO**: Expanding-window chronological walk-forward cross-validation optimizes LightGBM hyperparameters (learning rate, leaves, depth, subsample, regularization) against validation WMAPE per tier without leakage.
+- **MLflow Experiment Tracking**: Tracks every training run, parameter configuration, multi-tier metric snapshot (MAE, SMAPE, WMAPE, R2 for model vs. EIA vs. Naive), and model artifacts to SQLite/local MLflow tracking server.
+- **MLflow Model Registry**: Versioned registry governance for 3 tier models (`energy-demand-forecast-large/medium/small`) with `@candidate` and `@champion` aliases, integrated promotion gating, and fallback-aware serving.
 - **Data-Driven Guardrail**: Evaluates validation error against naive persistence per region; automatically falls back to naive persistence for anomalous edge cases (`GVL`, `HST`, `SPA`).
 - **FastAPI Serving & UI**: Interactive dark-themed web dashboard and REST API for real-time predictions, benchmark comparisons, and historical charting.
 
@@ -79,13 +82,13 @@ Open **http://127.0.0.1:8000** in your browser to explore predictions across all
 ```bash
 pytest tests/ -v
 ```
-*(79 tests passing across ingestion, validation, feature leakage, models, and serving endpoints).*
+*(91 tests passing across ingestion, validation, feature leakage, HPO, MLflow tracking, model registry, models, and serving endpoints).*
 
 ---
 
 ## API Reference
 
-- `GET /health`: Model status and cache availability.
+- `GET /health`: Model status, model source (registry/local), and cache availability.
 - `GET /api/regions`: List of 52 balancing authorities grouped by tier.
 - `GET /api/history?respondent=PJM&limit=60`: Historical demand and benchmark forecasts for charting.
 - `POST /api/predict`: Real-time inference endpoint.
@@ -103,6 +106,7 @@ pytest tests/ -v
 ```
 configs/
   ingestion.yaml            Tunable settings (pinned timezone, routes, batch sizes)
+  tuned_params.json         Optuna-tuned LightGBM hyperparameters per tier
 src/
   data/
     eia_client.py           HTTP client with retries, exponential backoff, rate limiting
@@ -113,20 +117,26 @@ src/
     holidays.py             Zero-dependency US federal holiday calendar & indicators
   models/
     baseline.py             Naive persistence and EIA day-ahead benchmark
+    cv.py                   Expanding-window walk-forward time-series CV splitter
+    hpo.py                  Optuna Bayesian hyperparameter search engine per tier
+    registry.py             MLflow Model Registry interface (@candidate/@champion)
     tier_model.py           3-Tier LightGBM models + validation guardrails
   evaluation/
     metrics.py              MAE, SMAPE, WMAPE, R² evaluation engine
+  utils/
+    mlflow_utils.py         Centralized MLflow tracking and metric logger
   serving/
-    app.py                  FastAPI backend endpoints
+    app.py                  FastAPI backend endpoints (registry or local fallback)
     static/index.html       Interactive dark-themed dashboard (Chart.js)
 scripts/
   fetch_raw_data.py         CLI for raw ingestion (backfill / incremental)
   validate_raw_data.py      Validation gate CLI runner
-  train_and_evaluate.py     End-to-end feature build, training, and evaluation
-  promote_model.py          Compares candidate vs. live model, gates promotion
+  tune_hyperparameters.py   CLI for Optuna walk-forward hyperparameter optimization
+  train_and_evaluate.py     End-to-end feature build, training, tracking, and evaluation
+  promote_model.py          Compares candidate vs. live model, updates registry & models/
 dags/
   retraining_pipeline.py    Airflow DAG: fetch -> validate -> train -> promote -> reload
-tests/                      79 offline unit tests (no network or disk state required)
+tests/                      91 offline unit tests (no network or disk state required)
 models/                     Live (promoted) model artifacts (model_tier_*.joblib)
 models_candidate/           Freshly trained, not-yet-promoted artifacts (ignored in git)
 data/                       Ignored in git (managed via partitioned Parquets)
@@ -203,10 +213,9 @@ The DAG runs daily at `0 6 * * *` (06:00 America/New_York). When the candidate m
 - [x] **Phase 1**: Raw ingestion (idempotent, resumable, timezone-pinned)
 - [x] **Phase 2**: Validation gate + schema enforcement
 - [x] **Phase 3**: Feature engineering (lags, rolling, trend, calendar, US holidays)
-- [x] **Phase 4**: 3-Tier LightGBM models + Baselines + Fallback Guardrail
-- [ ] **Phase 5**: Optuna hyperparameter optimization per tier
-- [ ] **Phase 6**: MLflow experiment tracking
-- [ ] **Phase 7**: MLflow model registry & versioning
+- [x] **Phase 5**: Optuna hyperparameter optimization per tier (expanding-window walk-forward CV)
+- [x] **Phase 6**: MLflow experiment tracking (multi-tier metric snapshots, parameters, artifacts)
+- [x] **Phase 7**: MLflow model registry & versioning (@candidate/@champion lifecycle governance)
 - [x] **Phase 8**: Apache Airflow DAG orchestration (automated daily retraining: fetch -> validate -> train candidate -> promote -> reload)
 - [x] **Phase 9**: Docker Compose containerization (Airflow scheduler, webserver, postgres)
 - [x] **Phase 10**: FastAPI serving (`/api/predict`) & Interactive UI

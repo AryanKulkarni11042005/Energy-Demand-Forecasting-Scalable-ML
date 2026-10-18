@@ -112,5 +112,30 @@ services:
       - "host.docker.internal:host-gateway"
     command: airflow scheduler
 
+  mlflow:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: energy-forecasting-airflow:latest
+    container_name: energy_mlflow_server
+    restart: always
+    ports:
+      - "5000:5000"
+    environment:
+      - MLFLOW_SERVER_ALLOWED_HOSTS=*
+      - MLFLOW_SERVER_DISABLE_SECURITY_MIDDLEWARE=true
+    volumes:
+      - .:/opt/airflow/project
+    working_dir: /opt/airflow/project
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command: >
+      mlflow server
+      --host 0.0.0.0
+      --port 5000
+      --backend-store-uri sqlite:////opt/airflow/project/mlflow.db
+      --default-artifact-root /opt/airflow/project/mlartifacts
+
 volumes:
   postgres-db-volume:
+

@@ -25,6 +25,8 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT))
 
+import mlflow
+
 from src.data.validate import load_modeling_frame, load_modeling_respondents
 from src.evaluation.metrics import evaluate_dataframe
 from src.features.build_features import (
@@ -32,7 +34,9 @@ from src.features.build_features import (
     build_features,
     split_time_series,
 )
+from src.models.hpo import load_tuned_params
 from src.models.tier_model import predict_with_tier_models, train_all_tiers
+from src.utils.mlflow_utils import log_full_evaluation, setup_mlflow
 
 logging.basicConfig(
     level=logging.INFO,
@@ -78,6 +82,29 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=PROJECT_ROOT / "data" / "evaluation_summary.json",
         help="Path to output evaluation summary JSON",
+    )
+    parser.add_argument(
+        "--params-path",
+        type=Path,
+        default=PROJECT_ROOT / "configs" / "tuned_params.json",
+        help="Path to tuned hyperparameters JSON from Optuna HPO (optional)",
+    )
+    parser.add_argument(
+        "--mlflow-tracking-uri",
+        type=str,
+        default="sqlite:///mlflow.db",
+        help="MLflow tracking URI",
+    )
+    parser.add_argument(
+        "--experiment-name",
+        type=str,
+        default="energy-demand-forecasting",
+        help="MLflow experiment name",
+    )
+    parser.add_argument(
+        "--no-mlflow",
+        action="store_true",
+        help="Disable MLflow experiment tracking",
     )
     return parser.parse_args()
 
@@ -200,12 +227,18 @@ def main() -> int:
     # 5. Train 3 Tier Models
     logger.info("training 3-tier LightGBM models...")
     args.models_dir.mkdir(parents=True, exist_ok=True)
+    tuned_params = None
+    if args.params_path and args.params_path.exists():
+        tuned_params = load_tuned_params(args.params_path)
+        logger.info("loaded tuned hyperparameters from %s", args.params_path)
+
     models = train_all_tiers(
         train_df=splits.train,
         val_df=splits.val,
         feature_cols=FEATURE_COLUMNS,
         target_col="target",
         models_dir=args.models_dir,
+        params_by_tier=tuned_params,
     )
 
     # Print guardrail fallback summary
@@ -246,6 +279,42 @@ def main() -> int:
     }
     args.output_summary.write_text(json.dumps(summary, indent=2))
     logger.info("saved evaluation summary to %s", args.output_summary)
+
+    # 10. MLflow Tracking (Phase 6)
+    if not args.no_mlflow:
+        try:
+            setup_mlflow(args.mlflow_tracking_uri, args.experiment_name)
+            with mlflow.start_run(run_name="train_3_tier_models") as run:
+                mlflow.set_tag("pipeline_phase", "phase_6_tracking")
+                mlflow.log_param("test_period_start", summary["test_period_start"])
+                mlflow.log_param("test_period_end", summary["test_period_end"])
+                mlflow.log_param("test_row_count", summary["test_row_count"])
+                mlflow.log_param("tuned_params_loaded", bool(tuned_params))
+                if tuned_params:
+                    for t, p in tuned_params.items():
+                        for param_name, param_val in p.items():
+                            mlflow.log_param(f"{t.lower()}_{param_name}", param_val)
+
+                log_full_evaluation(eval_model, eval_eia, eval_naive)
+                mlflow.log_artifact(str(args.output_summary))
+                for artifact in args.models_dir.glob("*.joblib"):
+                    mlflow.log_artifact(str(artifact), artifact_path="model_artifacts")
+                logger.info("successfully logged training metrics and artifacts to MLflow run %s", run.info.run_id)
+
+                # 11. Model Registry (Phase 7)
+                try:
+                    from src.models.registry import register_all_tier_models
+                    registered = register_all_tier_models(
+                        models_dir=args.models_dir,
+                        eval_summary=summary,
+                        alias="candidate",
+                        tracking_uri=args.mlflow_tracking_uri,
+                    )
+                    logger.info("registered models in MLflow Model Registry with alias @candidate: %s", registered)
+                except Exception as reg_err:
+                    logger.warning("could not register models to MLflow registry (continuing): %s", reg_err)
+        except Exception as e:
+            logger.warning("MLflow tracking encountered an error (continuing): %s", e)
 
     return 0
 
