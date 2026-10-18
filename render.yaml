@@ -2,7 +2,7 @@ services:
   - type: web
     name: energy-demand-forecasting
     env: docker
-    dockerfilePath: Dockerfile.serving
+    dockerfilePath: Dockerfile
     plan: free
     region: oregon
     healthCheckPath: /health
