@@ -31,6 +31,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed" / "features.parquet"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+MONITORING_DIR = PROJECT_ROOT / "data" / "monitoring"
+MONITORING_HTML = MONITORING_DIR / "drift_report.html"
+MONITORING_JSON = MONITORING_DIR / "drift_metrics.json"
 
 app = FastAPI(
     title="Energy Demand Forecasting MLOps",
@@ -260,4 +263,34 @@ def serve_ui():
     if not index_file.exists():
         return HTMLResponse("<h1>UI not installed yet</h1>")
     return FileResponse(index_file)
+
+
+@app.get("/monitoring/report", response_class=HTMLResponse)
+def serve_monitoring_report() -> HTMLResponse:
+    """Serve interactive Evidently AI HTML dashboard."""
+    if not MONITORING_HTML.exists():
+        return HTMLResponse(
+            "<h2>Evidently Monitoring Report Not Generated Yet</h2>"
+            "<p>Run <code>python scripts/run_drift_monitoring.py</code> to generate the report.</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=MONITORING_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/api/monitoring/status")
+def get_monitoring_status() -> dict[str, Any]:
+    """Return JSON summary of data drift and model stability."""
+    if not MONITORING_JSON.exists():
+        return {
+            "status": "not_available",
+            "message": "Run scripts/run_drift_monitoring.py to generate drift metrics",
+        }
+    try:
+        import json
+
+        data = json.loads(MONITORING_JSON.read_text(encoding="utf-8"))
+        data["status"] = "available"
+        return data
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 

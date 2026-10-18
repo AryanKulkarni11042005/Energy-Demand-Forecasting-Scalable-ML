@@ -75,6 +75,15 @@ def energy_demand_retraining_pipeline():
         bash_command=run("scripts/validate_raw_data.py"),
     )
 
+    generate_drift_report = BashOperator(
+        task_id="generate_drift_report",
+        bash_command=run(
+            "scripts/run_drift_monitoring.py "
+            f'--output-html "{PROJECT_ROOT}/data/monitoring/drift_report.html" '
+            f'--output-json "{PROJECT_ROOT}/data/monitoring/drift_metrics.json"'
+        ),
+    )
+
     train_candidate = BashOperator(
         task_id="train_candidate_model",
         bash_command=run(
@@ -125,7 +134,7 @@ def energy_demand_retraining_pipeline():
 
     promotion = promote_if_not_regressed()
 
-    fetch >> validate >> train_candidate >> promotion >> reload_live_models
+    fetch >> validate >> generate_drift_report >> train_candidate >> promotion >> reload_live_models
 
 
 energy_demand_retraining_pipeline()

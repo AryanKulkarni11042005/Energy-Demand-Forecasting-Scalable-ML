@@ -2,7 +2,7 @@
 
 Production-grade time-series forecasting of next-day regional electricity demand across US balancing authorities using the **EIA API v2**.
 
-**Status: Core MLOps Pipeline Complete (Phases 1–10, 13). 91 offline tests passing.**
+**Status: Complete Production MLOps Lifecycle (Phases 1–13). 105 offline tests passing.**
 
 ---
 
@@ -208,6 +208,36 @@ The DAG runs daily at `0 6 * * *` (06:00 America/New_York). When the candidate m
 
 ---
 
+## Zero-Cost Cloud Deployment (Phase 11)
+
+Designed for 100% free hosting with zero surprise billing:
+- **FastAPI Production Container**: Multi-stage lightweight image (`Dockerfile.serving`, <350 MB) based on `python:3.11-slim` with OpenMP runtime and non-root execution (`appuser`).
+- **Render.com Free Web Service**: Declarative blueprint (`render.yaml`) for 1-click free deployment (750 free hours/mo, automatic SSL, auto-deploy on push to GitHub).
+- **Hugging Face Spaces Dual-Deployment**: Supports instant Docker Spaces deployment (`README.hf.md`) offering **16 GB RAM and 2 vCPUs permanently free**.
+- **Serverless Automated Retraining**: Daily GitHub Actions cron workflow (`.github/workflows/daily_retraining.yml`) executing daily ingestion, validation, drift checks, training, and gated promotion at $0.00 cost within GitHub's free 2,000 monthly minutes.
+- **S3-Compatible Object Storage**: `CloudStorageClient` supporting Cloudflare R2 (10 GB permanent free storage with $0 egress charges) and AWS S3 free tier with offline local fallback.
+
+---
+
+## Evidently AI Drift & Performance Monitoring (Phase 12)
+
+Continuous evaluation and drift monitoring for production time series:
+- **Data Drift**: Evaluates Kolmogorov-Smirnov / Wasserstein distribution drift across all lag, rolling, trend, and calendar features.
+- **Target & Forecast Drift**: Tracks demand target distribution shifts and benchmark divergence.
+- **Regression Quality**: Computes MAE, RMSE, WMAPE, and error metrics across chronological evaluation splits.
+- **Interactive Visual Dashboard**: Generates comprehensive standalone HTML report (`data/monitoring/drift_report.html`) served directly at `GET /monitoring/report`.
+- **Machine-Readable API**: Exposes JSON stability status at `GET /api/monitoring/status`.
+- **Airflow DAG Integration**: Automatically generates drift reports as a scheduled task between data validation and candidate model training.
+
+```bash
+# Generate monitoring report manually
+python scripts/run_drift_monitoring.py \
+  --output-html data/monitoring/drift_report.html \
+  --output-json data/monitoring/drift_metrics.json
+```
+
+---
+
 ## Roadmap
 
 - [x] **Phase 1**: Raw ingestion (idempotent, resumable, timezone-pinned)
@@ -219,7 +249,7 @@ The DAG runs daily at `0 6 * * *` (06:00 America/New_York). When the candidate m
 - [x] **Phase 8**: Apache Airflow DAG orchestration (automated daily retraining: fetch -> validate -> train candidate -> promote -> reload)
 - [x] **Phase 9**: Docker Compose containerization (Airflow scheduler, webserver, postgres)
 - [x] **Phase 10**: FastAPI serving (`/api/predict`) & Interactive UI
-- [ ] **Phase 11**: Cloud deployment (AWS ECS / S3)
-- [ ] **Phase 12**: Evidently AI drift & performance monitoring
+- [x] **Phase 11**: Zero-cost cloud deployment (Render.com, Hugging Face Spaces, Cloudflare R2, GitHub Actions serverless cron)
+- [x] **Phase 12**: Evidently AI drift & performance monitoring (HTML dashboard, JSON metrics, Airflow integration)
 - [x] **Phase 13**: Automated retraining pipeline (gated promotion, no auto-regression)
 

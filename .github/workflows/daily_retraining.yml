@@ -1,0 +1,64 @@
+name: Scheduled Retraining & Health Pipeline
+
+on:
+  schedule:
+    - cron: '0 6 * * *'  # Daily at 06:00 UTC
+  workflow_dispatch:      # Allow manual trigger from GitHub UI
+
+jobs:
+  retrain_and_monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Run Validation Gate
+        run: python scripts/validate_raw_data.py
+
+      - name: Run Incremental Ingestion
+        env:
+          EIA_API_KEY: ${{ secrets.EIA_API_KEY }}
+        run: python scripts/fetch_raw_data.py --incremental || echo "No new EIA rows or API offline"
+
+      - name: Generate Evidently AI Drift & Performance Report
+        run: |
+          python scripts/run_drift_monitoring.py \
+            --output-html data/monitoring/drift_report.html \
+            --output-json data/monitoring/drift_metrics.json
+
+      - name: Train Candidate Tier Models
+        run: |
+          python scripts/train_and_evaluate.py \
+            --models-dir models_candidate/ \
+            --output-summary data/evaluation_summary_candidate.json
+
+      - name: Evaluate Promotion Gate
+        id: promotion
+        run: |
+          python scripts/promote_model.py \
+            --candidate-models-dir models_candidate \
+            --candidate-summary data/evaluation_summary_candidate.json \
+            --live-models-dir models \
+            --live-summary data/evaluation_summary.json
+
+      - name: Reload Live Cloud Service
+        if: steps.promotion.outcome == 'success'
+        env:
+          RENDER_SERVICE_URL: ${{ secrets.RENDER_SERVICE_URL }}
+        run: |
+          if [ -n "$RENDER_SERVICE_URL" ]; then
+            curl -sf -X POST "$RENDER_SERVICE_URL/admin/reload-models" || echo "Cloud service reload ping failed"
+          fi
