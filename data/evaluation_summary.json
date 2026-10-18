@@ -1,0 +1,104 @@
+{
+  "test_period_start": "2025-12-28",
+  "test_period_end": "2026-09-10",
+  "test_row_count": 13333,
+  "guardrail_fallback_regions": {
+    "Large": [],
+    "Medium": [],
+    "Small": [
+      "GVL",
+      "HST",
+      "SPA"
+    ]
+  },
+  "lightgbm_models": {
+    "Large": {
+      "mae": 46276.69,
+      "smape": 3.39,
+      "wmape": 3.48,
+      "r2": 0.9893,
+      "n_samples": 1542
+    },
+    "Medium": {
+      "mae": 7810.97,
+      "smape": 4.59,
+      "wmape": 4.59,
+      "r2": 0.9896,
+      "n_samples": 6411
+    },
+    "Small": {
+      "mae": 820.6,
+      "smape": 4.96,
+      "wmape": 4.12,
+      "r2": 0.9914,
+      "n_samples": 5374
+    },
+    "Overall": {
+      "mae": 9442.84,
+      "smape": 4.6,
+      "wmape": 3.87,
+      "r2": 0.9969,
+      "n_samples": 13327
+    }
+  },
+  "eia_benchmark": {
+    "Large": {
+      "mae": 45688.0,
+      "smape": 4.48,
+      "wmape": 3.43,
+      "r2": 0.9924,
+      "n_samples": 1498
+    },
+    "Medium": {
+      "mae": 11254.17,
+      "smape": 10.48,
+      "wmape": 6.6,
+      "r2": 0.9691,
+      "n_samples": 6272
+    },
+    "Small": {
+      "mae": 837.44,
+      "smape": 5.37,
+      "wmape": 4.03,
+      "r2": 0.9839,
+      "n_samples": 4986
+    },
+    "Overall": {
+      "mae": 11226.27,
+      "smape": 7.78,
+      "wmape": 4.52,
+      "r2": 0.9968,
+      "n_samples": 12756
+    }
+  },
+  "naive_baseline": {
+    "Large": {
+      "mae": 53485.09,
+      "smape": 4.07,
+      "wmape": 4.02,
+      "r2": 0.9869,
+      "n_samples": 1542
+    },
+    "Medium": {
+      "mae": 8662.09,
+      "smape": 5.15,
+      "wmape": 5.08,
+      "r2": 0.9877,
+      "n_samples": 6407
+    },
+    "Small": {
+      "mae": 918.8,
+      "smape": 5.51,
+      "wmape": 4.62,
+      "r2": 0.9899,
+      "n_samples": 5374
+    },
+    "Overall": {
+      "mae": 10726.54,
+      "smape": 5.17,
+      "wmape": 4.4,
+      "r2": 0.9962,
+      "n_samples": 13323
+    }
+  }
+}

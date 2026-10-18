@@ -7,6 +7,7 @@ using the 3-tier LightGBM models.
 from __future__ import annotations
 
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -30,6 +31,9 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 MODELS_DIR = PROJECT_ROOT / "models"
 DATA_PROCESSED = PROJECT_ROOT / "data" / "processed" / "features.parquet"
 STATIC_DIR = Path(__file__).resolve().parent / "static"
+MONITORING_DIR = PROJECT_ROOT / "data" / "monitoring"
+MONITORING_HTML = MONITORING_DIR / "drift_report.html"
+MONITORING_JSON = MONITORING_DIR / "drift_metrics.json"
 
 app = FastAPI(
     title="Energy Demand Forecasting MLOps",
@@ -48,19 +52,48 @@ app.add_middleware(
 # In-memory model cache
 loaded_models: dict[str, TierModel] = {}
 features_cache: pd.DataFrame | None = None
+model_source: str = "none"
 
 
 def get_models() -> dict[str, TierModel]:
-    global loaded_models
-    if not loaded_models and MODELS_DIR.exists():
-        for tier in ["Large", "Medium", "Small"]:
-            m_path = MODELS_DIR / f"model_tier_{tier.lower()}.joblib"
-            if m_path.exists():
-                try:
-                    loaded_models[tier] = TierModel.load(m_path)
-                    logger.info("loaded %s tier model from %s", tier, m_path)
-                except Exception as e:
-                    logger.warning("could not load %s model: %s", tier, e)
+    global loaded_models, model_source
+    if not loaded_models:
+        # Check if MLflow registry is explicitly enabled
+        use_registry = os.getenv("USE_MLFLOW_REGISTRY", "false").lower() in ("true", "1", "yes")
+        if use_registry:
+            try:
+                from src.models.registry import load_tier_model_from_registry
+                for tier in ["Large", "Medium", "Small"]:
+                    m = load_tier_model_from_registry(tier, alias="champion")
+                    if m is not None:
+                        loaded_models[tier] = m
+                if len(loaded_models) == 3:
+                    model_source = "mlflow_registry"
+                    logger.info("loaded all 3 tier models from MLflow Model Registry (@champion)")
+                    return loaded_models
+                else:
+                    logger.warning(
+                        "only %d models loaded from registry; falling back to local files",
+                        len(loaded_models),
+                    )
+                    loaded_models = {}
+            except Exception as e:
+                logger.warning("registry load attempt failed (%s); falling back to local files", e)
+                loaded_models = {}
+
+        # Fallback to local files
+        if not loaded_models and MODELS_DIR.exists():
+            for tier in ["Large", "Medium", "Small"]:
+                m_path = MODELS_DIR / f"model_tier_{tier.lower()}.joblib"
+                if m_path.exists():
+                    try:
+                        loaded_models[tier] = TierModel.load(m_path)
+                        logger.info("loaded %s tier model from %s", tier, m_path)
+                    except Exception as e:
+                        logger.warning("could not load %s model: %s", tier, e)
+            if loaded_models:
+                model_source = "local_filesystem"
+
     return loaded_models
 
 
@@ -102,6 +135,7 @@ def health() -> dict[str, Any]:
     return {
         "status": "healthy",
         "models_loaded": list(models.keys()),
+        "model_source": model_source,
         "features_available": DATA_PROCESSED.exists(),
     }
 
@@ -229,3 +263,34 @@ def serve_ui():
     if not index_file.exists():
         return HTMLResponse("<h1>UI not installed yet</h1>")
     return FileResponse(index_file)
+
+
+@app.get("/monitoring/report", response_class=HTMLResponse)
+def serve_monitoring_report() -> HTMLResponse:
+    """Serve interactive Evidently AI HTML dashboard."""
+    if not MONITORING_HTML.exists():
+        return HTMLResponse(
+            "<h2>Evidently Monitoring Report Not Generated Yet</h2>"
+            "<p>Run <code>python scripts/run_drift_monitoring.py</code> to generate the report.</p>",
+            status_code=404,
+        )
+    return HTMLResponse(content=MONITORING_HTML.read_text(encoding="utf-8"))
+
+
+@app.get("/api/monitoring/status")
+def get_monitoring_status() -> dict[str, Any]:
+    """Return JSON summary of data drift and model stability."""
+    if not MONITORING_JSON.exists():
+        return {
+            "status": "not_available",
+            "message": "Run scripts/run_drift_monitoring.py to generate drift metrics",
+        }
+    try:
+        import json
+
+        data = json.loads(MONITORING_JSON.read_text(encoding="utf-8"))
+        data["status"] = "available"
+        return data
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+

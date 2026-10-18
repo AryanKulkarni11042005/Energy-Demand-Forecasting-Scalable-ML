@@ -35,6 +35,17 @@ def parse_args() -> argparse.Namespace:
         default=2.0,
         help="Allowed WMAPE increase (in percentage points) before rejecting the candidate.",
     )
+    p.add_argument(
+        "--mlflow-tracking-uri",
+        type=str,
+        default="sqlite:///mlflow.db",
+        help="MLflow tracking URI",
+    )
+    p.add_argument(
+        "--no-registry",
+        action="store_true",
+        help="Skip updating MLflow Model Registry aliases",
+    )
     return p.parse_args()
 
 
@@ -90,6 +101,19 @@ def main() -> int:
     shutil.copy2(args.candidate_summary, args.live_summary)
 
     print("  RESULT: PROMOTED - candidate copied to production models/")
+
+    if not args.no_registry:
+        try:
+            from src.models.registry import promote_registered_tier_models
+            promoted_versions = promote_registered_tier_models(
+                from_alias="candidate",
+                to_alias="champion",
+                tracking_uri=args.mlflow_tracking_uri,
+            )
+            print(f"  MLFLOW REGISTRY: Promoted {len(promoted_versions)} tier models to @champion alias: {promoted_versions}")
+        except Exception as e:
+            print(f"  MLFLOW REGISTRY: Notice - registry alias promotion skipped/failed: {e}")
+
     print("=" * 70 + "\n")
     return 0
 

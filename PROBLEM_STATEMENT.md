@@ -119,17 +119,17 @@ The ML is deliberately simple. **The pipeline is the work.**
 
 - [x] Phase 1 — raw ingestion, idempotent and resumable
 - [x] Phase 2 — validation gate + EDA
-- [ ] Phase 3 — features, leakage-tested
-- [ ] Phase 4 — baselines + 3 tier models beating naive persistence
-- [ ] Phase 5 — Optuna, time-series aware
-- [ ] Phase 6 — MLflow tracking
-- [ ] Phase 7 — model registry
-- [ ] Phase 8 — Airflow DAG
-- [ ] Phase 9 — Docker Compose
-- [ ] Phase 10 — FastAPI `/predict`
-- [ ] Phase 11 — AWS
-- [ ] Phase 12 — monitoring
-- [ ] Phase 13 — automated retraining
+- [x] Phase 3 — features, leakage-tested
+- [x] Phase 4 — baselines + 3 tier models beating naive persistence
+- [x] Phase 5 — Optuna, time-series aware
+- [x] Phase 6 — MLflow tracking
+- [x] Phase 7 — model registry
+- [x] Phase 8 — Airflow DAG
+- [x] Phase 9 — Docker Compose
+- [x] Phase 10 — FastAPI `/predict`
+- [x] Phase 11 — zero-cost cloud deployment (Render, Hugging Face Spaces, Cloudflare R2, GitHub Actions)
+- [x] Phase 12 — Evidently AI drift & performance monitoring
+- [x] Phase 13 — automated retraining
 
 ## Changelog
 
@@ -137,3 +137,6 @@ The ML is deliberately simple. **The pipeline is the work.**
 |---|---|---|
 | 2026-08-21 | Statement frozen | Scope fixed before Phase 3 |
 | 2026-09-11 | Added SEC to Small tier | SEC reached 95% data coverage threshold in ingestion backfill (mean demand 5,664 MWh/day) |
+| 2026-10-18 | Updated Definition of Done | Marked Phases 3, 4, 8, 9, 10, 13 complete with 79 passing tests, Airflow DAG, Docker Compose, and FastAPI serving |
+| 2026-10-18 | Implemented Phases 5, 6, 7 | Added Optuna walk-forward HPO, MLflow experiment tracking, and MLflow Model Registry (@candidate/@champion lifecycle) with 91 passing offline tests |
+| 2026-10-18 | Implemented Phases 11, 12 | Added zero-cost cloud deployment (Render, Hugging Face Spaces, Cloudflare R2, GitHub Actions serverless cron) and Evidently AI drift & performance monitoring with 105 passing offline tests |

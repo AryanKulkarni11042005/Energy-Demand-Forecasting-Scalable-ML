@@ -5,15 +5,19 @@
 *.key
 *.pem
 
-# Data (tracked via DVC/S3, never committed to git)
-/data/
+# Data (raw data ignored; allow processed features and monitoring reports for standalone web deployment)
+/data/raw/
+/data/interim/
+/data/evaluation_summary_candidate.json
 !/data/**/.gitkeep
+!/data/processed/features.parquet
+!/data/monitoring/*
 
-# Model weights and artifacts (tracked via MLflow / Model Registry / S3)
+# Model weights and artifacts (candidate models ignored; 3 production tier models tracked for zero-cost deployment)
+/models_candidate/
 /models/*
 !/models/.gitkeep
-/models_candidate/
-*.joblib
+!/models/model_tier_*.joblib
 *.pkl
 *.pickle
 *.onnx

@@ -210,14 +210,16 @@ def train_all_tiers(
     feature_cols: list[str] = FEATURE_COLUMNS,
     target_col: str = "target",
     models_dir: Path | None = None,
+    params_by_tier: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, TierModel]:
     """Train models for all three tiers ('Large', 'Medium', 'Small')."""
     tiers = ["Large", "Medium", "Small"]
     models: dict[str, TierModel] = {}
 
     for tier in tiers:
+        params = params_by_tier.get(tier) if params_by_tier else None
         tm = TierModel(tier=tier, feature_cols=feature_cols)
-        tm.fit(train_df, val_df, target_col=target_col)
+        tm.fit(train_df, val_df, target_col=target_col, params=params)
         models[tier] = tm
 
         if models_dir:

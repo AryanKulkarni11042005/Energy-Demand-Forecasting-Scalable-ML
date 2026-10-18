@@ -2,7 +2,7 @@
 
 Production-grade time-series forecasting of next-day regional electricity demand across US balancing authorities using the **EIA API v2**.
 
-**Status: Core MLOps Pipeline Complete (Phases 1–4 & Phase 10 Serving/UI). 78 offline tests passing.**
+**Status: Complete Production MLOps Lifecycle (Phases 1–13). 105 offline tests passing.**
 
 ---
 
@@ -32,6 +32,9 @@ Production-grade time-series forecasting of next-day regional electricity demand
 - **Temporal Integrity**: Full calendar daily reindexing prevents `shift()` from skipping over interior missing days. Chronological splits with zero data leakage (`train < val < test`).
 - **Feature Engineering**: Demand lags ($t, t-1, t-2, t-6, t-7, t-13, t-14, t-364$), rolling stats (7, 14, 30 days), rolling trend slopes (7 and 30-day linear regression momentum), exogenous grid features (`net_generation`, `interchange`), and US federal holiday indicators (observed dates, before/after, bridge days).
 - **Per-Tier LightGBM Models**: Avoids 52-model operational sprawl by clustering into **Large** (≥500k MWh/day), **Medium** (50k–500k), and **Small** (<50k).
+- **Time-Series Aware Optuna HPO**: Expanding-window chronological walk-forward cross-validation optimizes LightGBM hyperparameters (learning rate, leaves, depth, subsample, regularization) against validation WMAPE per tier without leakage.
+- **MLflow Experiment Tracking**: Tracks every training run, parameter configuration, multi-tier metric snapshot (MAE, SMAPE, WMAPE, R2 for model vs. EIA vs. Naive), and model artifacts to SQLite/local MLflow tracking server.
+- **MLflow Model Registry**: Versioned registry governance for 3 tier models (`energy-demand-forecast-large/medium/small`) with `@candidate` and `@champion` aliases, integrated promotion gating, and fallback-aware serving.
 - **Data-Driven Guardrail**: Evaluates validation error against naive persistence per region; automatically falls back to naive persistence for anomalous edge cases (`GVL`, `HST`, `SPA`).
 - **FastAPI Serving & UI**: Interactive dark-themed web dashboard and REST API for real-time predictions, benchmark comparisons, and historical charting.
 
@@ -79,13 +82,13 @@ Open **http://127.0.0.1:8000** in your browser to explore predictions across all
 ```bash
 pytest tests/ -v
 ```
-*(78 tests passing across ingestion, validation, feature leakage, models, and serving endpoints).*
+*(91 tests passing across ingestion, validation, feature leakage, HPO, MLflow tracking, model registry, models, and serving endpoints).*
 
 ---
 
 ## API Reference
 
-- `GET /health`: Model status and cache availability.
+- `GET /health`: Model status, model source (registry/local), and cache availability.
 - `GET /api/regions`: List of 52 balancing authorities grouped by tier.
 - `GET /api/history?respondent=PJM&limit=60`: Historical demand and benchmark forecasts for charting.
 - `POST /api/predict`: Real-time inference endpoint.
@@ -103,6 +106,7 @@ pytest tests/ -v
 ```
 configs/
   ingestion.yaml            Tunable settings (pinned timezone, routes, batch sizes)
+  tuned_params.json         Optuna-tuned LightGBM hyperparameters per tier
 src/
   data/
     eia_client.py           HTTP client with retries, exponential backoff, rate limiting
@@ -113,20 +117,26 @@ src/
     holidays.py             Zero-dependency US federal holiday calendar & indicators
   models/
     baseline.py             Naive persistence and EIA day-ahead benchmark
+    cv.py                   Expanding-window walk-forward time-series CV splitter
+    hpo.py                  Optuna Bayesian hyperparameter search engine per tier
+    registry.py             MLflow Model Registry interface (@candidate/@champion)
     tier_model.py           3-Tier LightGBM models + validation guardrails
   evaluation/
     metrics.py              MAE, SMAPE, WMAPE, R² evaluation engine
+  utils/
+    mlflow_utils.py         Centralized MLflow tracking and metric logger
   serving/
-    app.py                  FastAPI backend endpoints
+    app.py                  FastAPI backend endpoints (registry or local fallback)
     static/index.html       Interactive dark-themed dashboard (Chart.js)
 scripts/
   fetch_raw_data.py         CLI for raw ingestion (backfill / incremental)
   validate_raw_data.py      Validation gate CLI runner
-  train_and_evaluate.py     End-to-end feature build, training, and evaluation
-  promote_model.py          Compares candidate vs. live model, gates promotion
+  tune_hyperparameters.py   CLI for Optuna walk-forward hyperparameter optimization
+  train_and_evaluate.py     End-to-end feature build, training, tracking, and evaluation
+  promote_model.py          Compares candidate vs. live model, updates registry & models/
 dags/
   retraining_pipeline.py    Airflow DAG: fetch -> validate -> train -> promote -> reload
-tests/                      78 offline unit tests (no network or disk state required)
+tests/                      91 offline unit tests (no network or disk state required)
 models/                     Live (promoted) model artifacts (model_tier_*.joblib)
 models_candidate/           Freshly trained, not-yet-promoted artifacts (ignored in git)
 data/                       Ignored in git (managed via partitioned Parquets)
@@ -157,95 +167,74 @@ POST /admin/reload-models             (tells the running FastAPI server to reloa
 A rejected promotion is not a pipeline failure — it means the guardrail worked and the
 previous production model was correctly left in place.
 
-### Status: pipeline logic verified, Airflow scheduler blocked on macOS (arm64)
+### Airflow Deployment via Docker Compose
 
-Every stage of the pipeline has been run and verified end-to-end for real, individually,
-against live data:
+Airflow runs inside containerized services orchestrated by `docker-compose.yaml`, mounting your project files, logs, and datasets directly:
 
-- `fetch_raw_data.py --incremental` — fetched real rows from the EIA API
-- `validate_raw_data.py` — passed against 793,160 real rows, correct exit codes confirmed
-- `train_and_evaluate.py --models-dir models_candidate/` — trained real LightGBM models,
-  wrote real metrics to `evaluation_summary_candidate.json`, left `models/` untouched
-- `promote_model.py` — correctly compared candidate vs. live WMAPE and promoted
-- `POST /admin/reload-models` — confirmed live against a running `uvicorn` server
+- **PostgreSQL 16**: Metadata store
+- **Airflow Webserver**: Web UI on port 8080 (LocalExecutor)
+- **Airflow Scheduler**: Executes tasks locally and handles DAG schedules
+- **Airflow Init**: Automated DB migrations and admin user creation
 
-**What's not working yet: Apache Airflow's own scheduler/webserver processes crash on
-this machine.** On this Mac (macOS arm64), Airflow 2.10.5's internal gunicorn-based
-subprocesses (both the webserver and the scheduler's own internal API server) segfault
-on fork (`SIGSEGV`) immediately on startup — before any task or request is even handled.
-This reproduces with `sync` and `gthread` worker classes, with `OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES`,
-and with `AIRFLOW__LOGGING__SERVE_LOGS=False`, so it is not a worker-class or logging
-config issue — it looks like a broken native dependency (likely gunicorn/grpcio/a C
-extension) in this specific Airflow + Python 3.12 install on arm64 macOS, not a bug in
-this project's code or DAG.
+#### 1. Start Docker Desktop
+Make sure Docker Desktop is running on your machine.
 
-**Until that's resolved (planned: try again on Windows), verify/run the pipeline via the
-CLI directly, bypassing Airflow's scheduler:**
+#### 2. Start the Airflow Stack
 
 ```bash
-# Run each stage manually, in order, exactly as the DAG would:
-.venv/bin/python scripts/fetch_raw_data.py --incremental
-.venv/bin/python scripts/validate_raw_data.py
-.venv/bin/python scripts/train_and_evaluate.py \
-  --models-dir models_candidate --output-summary data/evaluation_summary_candidate.json
-.venv/bin/python scripts/promote_model.py
-curl -X POST http://127.0.0.1:8000/admin/reload-models   # only if the server is running
+# Build custom image (with project requirements) and start services in background
+docker compose up --build -d
 ```
 
-Or, once Airflow is stable in an environment, test/run it through Airflow as normal
-(see below) — the DAG file itself does not need to change.
+#### 3. Access Airflow UI
+Open **http://localhost:8080** in your browser:
+- **Username**: `admin`
+- **Password**: `admin`
 
-### Why Airflow runs in its own environment
-
-The project's `.venv` is Python 3.13, and Apache Airflow does not yet officially support
-3.13 (constraint files cap at 3.12). Airflow itself runs from a separate `.venv-airflow`
-(Python 3.12) that only hosts the scheduler/webserver; every DAG task shells out to the
-project's own `.venv` to run the actual scripts, so application code never runs under a
-different Python version than it's tested with.
-
-### One-time setup
+#### 4. Trigger or Test DAG Runs
 
 ```bash
-# 1. Airflow's own environment (Python 3.12 required)
-brew install python@3.12
-python3.12 -m venv .venv-airflow
-.venv-airflow/bin/pip install "apache-airflow==2.10.5" \
-  --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-2.10.5/constraints-3.12.txt"
+# Trigger an immediate manual run of the retraining pipeline
+docker compose exec airflow-scheduler airflow dags trigger energy_demand_retraining_pipeline
 
-# 2. Point Airflow at this project and initialize its metadata DB
-export AIRFLOW_HOME="$(pwd)/.airflow"
-.venv-airflow/bin/airflow db migrate
-# dags_folder is already set to ./dags and load_examples=False in .airflow/airflow.cfg
+# View live scheduler logs
+docker compose logs -f airflow-scheduler
 
-# 3. Create an admin user (first time only)
-.venv-airflow/bin/airflow users create \
-  --username admin --password admin --firstname A --lastname B \
-  --role Admin --email you@example.com
+# Stop the stack
+docker compose down
 ```
 
-### Running it
+The DAG runs daily at `0 6 * * *` (06:00 America/New_York). When the candidate model passes the promotion gate, Airflow calls `http://host.docker.internal:8000/admin/reload-models` to notify the running FastAPI server to load the new weights instantly.
+
+---
+
+## Zero-Cost Cloud Deployment (Phase 11)
+
+Designed for 100% free hosting with zero surprise billing:
+- **FastAPI Production Container**: Multi-stage lightweight image (`Dockerfile.serving`, <350 MB) based on `python:3.11-slim` with OpenMP runtime and non-root execution (`appuser`).
+- **Render.com Free Web Service**: Declarative blueprint (`render.yaml`) for 1-click free deployment (750 free hours/mo, automatic SSL, auto-deploy on push to GitHub).
+- **Hugging Face Spaces Dual-Deployment**: Supports instant Docker Spaces deployment (`README.hf.md`) offering **16 GB RAM and 2 vCPUs permanently free**.
+- **Serverless Automated Retraining**: Daily GitHub Actions cron workflow (`.github/workflows/daily_retraining.yml`) executing daily ingestion, validation, drift checks, training, and gated promotion at $0.00 cost within GitHub's free 2,000 monthly minutes.
+- **S3-Compatible Object Storage**: `CloudStorageClient` supporting Cloudflare R2 (10 GB permanent free storage with $0 egress charges) and AWS S3 free tier with offline local fallback.
+
+---
+
+## Evidently AI Drift & Performance Monitoring (Phase 12)
+
+Continuous evaluation and drift monitoring for production time series:
+- **Data Drift**: Evaluates Kolmogorov-Smirnov / Wasserstein distribution drift across all lag, rolling, trend, and calendar features.
+- **Target & Forecast Drift**: Tracks demand target distribution shifts and benchmark divergence.
+- **Regression Quality**: Computes MAE, RMSE, WMAPE, and error metrics across chronological evaluation splits.
+- **Interactive Visual Dashboard**: Generates comprehensive standalone HTML report (`data/monitoring/drift_report.html`) served directly at `GET /monitoring/report`.
+- **Machine-Readable API**: Exposes JSON stability status at `GET /api/monitoring/status`.
+- **Airflow DAG Integration**: Automatically generates drift reports as a scheduled task between data validation and candidate model training.
 
 ```bash
-export AIRFLOW_HOME="$(pwd)/.airflow"
-
-# Start the scheduler (in one terminal)
-.venv-airflow/bin/airflow scheduler
-
-# Start the webserver / UI at http://localhost:8080 (in another terminal)
-.venv-airflow/bin/airflow webserver --port 8080
-
-# Or trigger a single run manually without the scheduler
-.venv-airflow/bin/airflow dags trigger energy_demand_retraining_pipeline
-
-# Or test a single task in isolation (no DB run history needed)
-.venv-airflow/bin/airflow tasks test energy_demand_retraining_pipeline validate_raw_data 2026-01-01
+# Generate monitoring report manually
+python scripts/run_drift_monitoring.py \
+  --output-html data/monitoring/drift_report.html \
+  --output-json data/monitoring/drift_metrics.json
 ```
-
-The DAG is scheduled for `0 6 * * *` (daily 06:00 America/New_York) — edit the `schedule`
-in `dags/retraining_pipeline.py` to change cadence. The serving app (`uvicorn src.serving.app:app`)
-should be running for the final `reload_live_models` step to take effect immediately; if it
-isn't reachable, that step is skipped with a warning and the new model still loads on next
-server start.
 
 ---
 
@@ -254,13 +243,13 @@ server start.
 - [x] **Phase 1**: Raw ingestion (idempotent, resumable, timezone-pinned)
 - [x] **Phase 2**: Validation gate + schema enforcement
 - [x] **Phase 3**: Feature engineering (lags, rolling, trend, calendar, US holidays)
-- [x] **Phase 4**: 3-Tier LightGBM models + Baselines + Fallback Guardrail
-- [ ] **Phase 5**: Optuna hyperparameter optimization per tier
-- [ ] **Phase 6**: MLflow experiment tracking
-- [ ] **Phase 7**: MLflow model registry & versioning
-- [~] **Phase 8**: Apache Airflow DAG orchestration — DAG written & pipeline logic verified end-to-end via CLI; Airflow's own scheduler/webserver currently segfault on this Mac (arm64) — see [status note](#status-pipeline-logic-verified-airflow-scheduler-blocked-on-macos-arm64)
-- [ ] **Phase 9**: Docker Compose containerization
+- [x] **Phase 5**: Optuna hyperparameter optimization per tier (expanding-window walk-forward CV)
+- [x] **Phase 6**: MLflow experiment tracking (multi-tier metric snapshots, parameters, artifacts)
+- [x] **Phase 7**: MLflow model registry & versioning (@candidate/@champion lifecycle governance)
+- [x] **Phase 8**: Apache Airflow DAG orchestration (automated daily retraining: fetch -> validate -> train candidate -> promote -> reload)
+- [x] **Phase 9**: Docker Compose containerization (Airflow scheduler, webserver, postgres)
 - [x] **Phase 10**: FastAPI serving (`/api/predict`) & Interactive UI
-- [ ] **Phase 11**: Cloud deployment (AWS ECS / S3)
-- [ ] **Phase 12**: Evidently AI drift & performance monitoring
-- [x] **Phase 13**: Automated retraining pipeline (gated promotion, no auto-regression) — logic proven, run manually via CLI until Airflow is stable
+- [x] **Phase 11**: Zero-cost cloud deployment (Render.com, Hugging Face Spaces, Cloudflare R2, GitHub Actions serverless cron)
+- [x] **Phase 12**: Evidently AI drift & performance monitoring (HTML dashboard, JSON metrics, Airflow integration)
+- [x] **Phase 13**: Automated retraining pipeline (gated promotion, no auto-regression)
+
